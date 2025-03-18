@@ -99,6 +99,24 @@ class WalletManager:
         else:
             raise FileNotFoundError(f"Không tìm thấy ví: {address}")
 
+    def check_wallet_exists(self, address: str) -> bool:
+        """
+        Kiểm tra xem địa chỉ ví có tồn tại trong hệ thống local không.
+        
+        Args:
+            address: Địa chỉ ví cần kiểm tra
+            
+        Returns:
+            bool: True nếu ví tồn tại, False nếu không
+        """
+        try:
+            # Kiểm tra trong danh sách ví đã lưu
+            # Implement theo cách lưu trữ ví của bạn
+            return address in self.wallets
+        except Exception as e:
+            logger.error(f"Lỗi khi kiểm tra ví: {e}")
+            return False
+
 
 if __name__ == "__main__":
     # Kiểm tra nhanh
@@ -124,3 +142,4 @@ if __name__ == "__main__":
     # Xóa ví
     if wallet_manager.delete_wallet(wallet2.address):
         print(f"\nĐã xóa ví: {wallet2.address}")
+

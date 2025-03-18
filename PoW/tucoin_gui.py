@@ -24,6 +24,7 @@ class TuCoinGUI:
         self.running = True
         self.auto_mining = False
         self.auto_mining_thread = None
+        self.current_mining_thread = None  # Thêm biến để theo dõi thread đào hiện tại
 
         # Khởi tạo blockchain trước
         self.blockchain = Blockchain()
@@ -300,86 +301,118 @@ class TuCoinGUI:
             messagebox.showinfo("Thành công", "Đã sao chép địa chỉ ví vào clipboard")
 
     def create_network_tab(self):
-        """Tạo tab Mạng."""
+        """Tạo tab Mạng với tính năng tự động phát hiện."""
         # Frame chính
         main_frame = ttk.Frame(self.network_frame, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Frame thông tin node
-        info_frame = ttk.LabelFrame(main_frame, text="Thông tin node", padding=10)
-        info_frame.pack(fill=tk.X, pady=5)
-
-        # Địa chỉ node
-        address_frame = ttk.Frame(info_frame)
-        address_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(address_frame, text="Địa chỉ node:").pack(side=tk.LEFT, padx=5)
-        ttk.Label(address_frame, text=self.node.address).pack(side=tk.LEFT)
-
-        # Frame kết nối
-        connect_frame = ttk.LabelFrame(main_frame, text="Kết nối với node khác", padding=10)
-        connect_frame.pack(fill=tk.X, pady=5)
-
-        # IP và port để kết nối
-        ip_frame = ttk.Frame(connect_frame)
-        ip_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(ip_frame, text="Địa chỉ IP:").pack(side=tk.LEFT, padx=5)
-        self.connect_ip_entry = ttk.Entry(ip_frame)
-        self.connect_ip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.connect_ip_entry.insert(0, "127.0.0.1")
-
-        port_frame = ttk.Frame(connect_frame)
-        port_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(port_frame, text="Cổng:").pack(side=tk.LEFT, padx=5)
-        self.connect_port_entry = ttk.Entry(port_frame)
-        self.connect_port_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.connect_port_entry.insert(0, "5000")
-
-        # Nút kết nối
-        ttk.Button(
-            connect_frame, 
-            text="Kết nối", 
-            command=self.connect_to_peer
-        ).pack(pady=10)
-
+        
+        # Frame trạng thái mạng
+        status_frame = ttk.LabelFrame(main_frame, text="Trạng thái mạng", padding=10)
+        status_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(status_frame, text="Địa chỉ node:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.node_address_label = ttk.Label(status_frame, text=f"{self.node.host}:{self.node.port}")
+        self.node_address_label.grid(row=0, column=1, sticky=tk.W, pady=2)
+        
+        ttk.Label(status_frame, text="Trạng thái discovery:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.discovery_status_label = ttk.Label(status_frame, text="Đang hoạt động")
+        self.discovery_status_label.grid(row=1, column=1, sticky=tk.W, pady=2)
+        
         # Frame danh sách peers
-        peers_frame = ttk.LabelFrame(main_frame, text="Danh sách các node đã kết nối", padding=10)
+        peers_frame = ttk.LabelFrame(main_frame, text="Danh sách node đã kết nối", padding=10)
         peers_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        # Listbox hiển thị danh sách peers
-        self.peers_listbox = tk.Listbox(peers_frame)
-        self.peers_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Scrollbar cho listbox
-        scrollbar = ttk.Scrollbar(peers_frame, orient=tk.VERTICAL, command=self.peers_listbox.yview)
-        self.peers_listbox.configure(yscrollcommand=scrollbar.set)
+        
+        # Container cho listbox và scrollbar
+        list_container = ttk.Frame(peers_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Tạo Treeview thay vì Listbox để hiển thị thông tin chi tiết hơn
+        self.peers_tree = ttk.Treeview(list_container, columns=("address", "status", "discovered"), show="headings")
+        self.peers_tree.heading("address", text="Địa chỉ")
+        self.peers_tree.heading("status", text="Trạng thái")
+        self.peers_tree.heading("discovered", text="Phát hiện lúc")
+        
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.peers_tree.yview)
+        self.peers_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.peers_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Frame điều khiển kết nối thủ công
+        manual_frame = ttk.LabelFrame(main_frame, text="Kết nối thủ công", padding=10)
+        manual_frame.pack(fill=tk.X, pady=5)
+        
+        # Input địa chỉ IP
+        ttk.Label(manual_frame, text="IP:").pack(side=tk.LEFT, padx=5)
+        self.connect_ip_entry = ttk.Entry(manual_frame)
+        self.connect_ip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # Input port
+        ttk.Label(manual_frame, text="Port:").pack(side=tk.LEFT, padx=5)
+        self.connect_port_entry = ttk.Entry(manual_frame, width=10)
+        self.connect_port_entry.pack(side=tk.LEFT, padx=5)
+        
+        # Nút kết nối
+        self.connect_button = ttk.Button(manual_frame, text="Kết nối", command=self.connect_to_peer)
+        self.connect_button.pack(side=tk.LEFT, padx=5)
+        
+        # Nút ngắt kết nối đã chọn
+        self.disconnect_button = ttk.Button(manual_frame, text="Ngắt kết nối", command=self.disconnect_peer)
+        self.disconnect_button.pack(side=tk.LEFT, padx=5)
 
     def connect_to_peer(self):
-        """Kết nối đến một node khác."""
-        try:
-            host = self.connect_ip_entry.get()
-            port = int(self.connect_port_entry.get())
-            
-            if self.node.connect_to_peer(host, port):
-                messagebox.showinfo("Thành công", f"Đã kết nối đến {host}:{port}")
-                self.update_ui()
-            else:
-                messagebox.showerror("Lỗi", f"Không thể kết nối đến {host}:{port}")
+        """Kết nối thủ công đến peer."""
+        ip = self.connect_ip_entry.get().strip()
+        port = self.connect_port_entry.get().strip()
         
+        if not ip or not port:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập đầy đủ IP và Port")
+            return
+        
+        try:
+            port = int(port)
+            success = self.node.connect_to_peer(ip, port)
+            
+            if success:
+                messagebox.showinfo("Thành công", f"Đã kết nối đến {ip}:{port}")
+                self.update_network_status()
+            else:
+                messagebox.showerror("Lỗi", f"Không thể kết nối đến {ip}:{port}")
         except ValueError:
-            messagebox.showerror("Lỗi", "Cổng không hợp lệ")
+            messagebox.showerror("Lỗi", "Port phải là số nguyên")
         except Exception as e:
-            messagebox.showerror("Lỗi", str(e))
+            messagebox.showerror("Lỗi", f"Lỗi kết nối: {str(e)}")
 
-    def update_peers_list(self):
-        """Cập nhật danh sách peers trong UI."""
-        # Xóa danh sách cũ
-        self.peers_listbox.delete(0, tk.END)
+    def disconnect_peer(self):
+        """Ngắt kết nối với peer đã chọn."""
+        selection = self.peers_tree.selection()
+        if not selection:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một node để ngắt kết nối")
+            return
+        
+        peer_address = self.peers_tree.item(selection[0])['values'][0]
+        try:
+            self.node.disconnect_peer(peer_address)
+            self.update_network_status()
+            messagebox.showinfo("Thành công", f"Đã ngắt kết nối với {peer_address}")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể ngắt kết nối: {str(e)}")
+
+    def update_network_status(self):
+        """Cập nhật trạng thái mạng trong GUI."""
+        # Xóa danh sách peers hiện tại
+        for item in self.peers_tree.get_children():
+            self.peers_tree.delete(item)
+        
         # Thêm các peers mới
         for peer in self.node.peers:
-            self.peers_listbox.insert(tk.END, peer)
-        # Cập nhật label số lượng peers
-        self.overview_peers_label.config(text=str(len(self.node.peers)))
+            # Giả sử peer_info là dict chứa thông tin chi tiết về peer
+            peer_info = self.node.get_peer_info(peer)  # Cần thêm method này vào Node class
+            self.peers_tree.insert("", tk.END, values=(
+                peer,
+                peer_info.get("status", "Đã kết nối"),
+                peer_info.get("discovered_time", "N/A")
+            ))
 
     def mine_block(self):
         """Đào khối mới."""
@@ -393,21 +426,43 @@ class TuCoinGUI:
         self.mine_button["state"] = "disabled"
         
         def mining_thread():
-            # Đào khối mới
-            new_block = self.node.mine_block(wallet.address)
-            
-            # Kích hoạt lại nút đào
-            self.start_mining_button["state"] = "normal"
-            self.mine_button["state"] = "normal"
-            
-            if new_block:
-                messagebox.showinfo("Thành công", f"Đã đào được khối mới #{new_block.index}")
-                self.update_ui()
-            else:
-                messagebox.showerror("Lỗi", "Không thể đào khối mới")
+            try:
+                # Đào khối mới
+                new_block = self.node.mine_block(wallet.address)
+                
+                if new_block:
+                    self.root.after(0, lambda: messagebox.showinfo("Thành công", 
+                        f"Đã đào được khối mới #{new_block.index}"))
+                    self.root.after(0, self.update_ui)
+                else:
+                    logger.info("Đã dừng đào khối")
+            except Exception as e:
+                logger.error(f"Lỗi khi đào khối: {e}")
+                self.root.after(0, lambda: messagebox.showerror("Lỗi", 
+                    "Không thể đào khối mới"))
+            finally:
+                # Kích hoạt lại nút đào
+                self.root.after(0, self._enable_mining_buttons)
+                self.current_mining_thread = None
         
-        # Chạy đào trong thread riêng
-        threading.Thread(target=mining_thread, daemon=True).start()
+        # Dừng thread đào hiện tại nếu có
+        self.stop_current_mining()
+        
+        # Bắt đầu thread đào mới
+        self.current_mining_thread = threading.Thread(target=mining_thread, daemon=True)
+        self.current_mining_thread.start()
+
+    def stop_current_mining(self):
+        """Dừng quá trình đào hiện tại."""
+        if self.current_mining_thread and self.current_mining_thread.is_alive():
+            self.node.blockchain.stop_mining()
+            # Đợi thread dừng trong thời gian ngắn
+            self.current_mining_thread.join(timeout=1.0)
+
+    def _enable_mining_buttons(self):
+        """Kích hoạt lại các nút đào."""
+        self.start_mining_button["state"] = "normal"
+        self.mine_button["state"] = "normal"
 
     def show_send_dialog(self):
         """Hiển thị hộp thoại gửi TuCoin."""
@@ -439,6 +494,49 @@ class TuCoinGUI:
         # Frame gửi giao dịch
         send_frame = ttk.LabelFrame(main_frame, text="Gửi TuCoin", padding=10)
         send_frame.pack(fill=tk.X, pady=5)
+
+        # Thêm label hiển thị trạng thái
+        self.transaction_status_label = ttk.Label(
+            send_frame, 
+            text="",
+            foreground="blue"
+        )
+        self.transaction_status_label.pack(fill=tk.X, pady=5)
+
+        # Frame lịch sử giao dịch
+        history_frame = ttk.LabelFrame(main_frame, text="Lịch sử giao dịch", padding=10)
+        history_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Treeview cho lịch sử giao dịch
+        self.transaction_history_tree = ttk.Treeview(
+            history_frame,
+            columns=("time", "type", "amount", "sender", "receiver", "status"),
+            show="headings"
+        )
+
+        # Định nghĩa các cột
+        self.transaction_history_tree.heading("time", text="Thời gian")
+        self.transaction_history_tree.heading("type", text="Loại")
+        self.transaction_history_tree.heading("amount", text="Số lượng")
+        self.transaction_history_tree.heading("sender", text="Người gửi")
+        self.transaction_history_tree.heading("receiver", text="Người nhận")
+        self.transaction_history_tree.heading("status", text="Trạng thái")
+
+        # Điều chỉnh độ rộng cột
+        self.transaction_history_tree.column("time", width=150)
+        self.transaction_history_tree.column("type", width=100)
+        self.transaction_history_tree.column("amount", width=100)
+        self.transaction_history_tree.column("sender", width=150)
+        self.transaction_history_tree.column("receiver", width=150)
+        self.transaction_history_tree.column("status", width=100)
+
+        # Thêm scrollbar
+        scrollbar = ttk.Scrollbar(history_frame, orient=tk.VERTICAL, command=self.transaction_history_tree.yview)
+        self.transaction_history_tree.configure(yscrollcommand=scrollbar.set)
+
+        # Pack các widget
+        self.transaction_history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Địa chỉ người gửi (ví hiện tại)
         from_frame = ttk.Frame(send_frame)
@@ -498,40 +596,101 @@ class TuCoinGUI:
 
     def send_transaction(self):
         """Gửi giao dịch mới."""
+        # 1. Kiểm tra ví
         wallet = self.wallet_manager.get_current_wallet()
         if not wallet:
-            messagebox.showerror("Lỗi", "Vui lòng chọn ví trước")
+            messagebox.showerror("Lỗi", "Vui lòng chọn ví trước khi giao dịch")
             return
-        
-        receiver = self.transaction_to_entry.get()
-        amount_str = self.transaction_amount_entry.get()
-        
+
+        # 2. Kiểm tra input
+        receiver = self.transaction_to_entry.get().strip()
+        amount_str = self.transaction_amount_entry.get().strip()
+
+        if not receiver:
+            messagebox.showerror("Lỗi", "Vui lòng nhập địa chỉ ví người nhận")
+            self.transaction_to_entry.focus()
+            return
+
+        if not amount_str:
+            messagebox.showerror("Lỗi", "Vui lòng nhập số lượng TuCoin")
+            self.transaction_amount_entry.focus()
+            return
+
+        # 3. Kiểm tra số lượng
         try:
             amount = float(amount_str)
-            if amount <= 0:
-                raise ValueError("Số lượng phải lớn hơn 0")
-            
-            # Kiểm tra số dư
-            balance = self.blockchain.get_balance(wallet.address)
-            if amount > balance:
-                messagebox.showerror("Lỗi", f"Số dư không đủ (hiện có {balance} TuCoin)")
-                return
-            
-            # Tạo và gửi giao dịch
+        except ValueError:
+            messagebox.showerror("Lỗi", "Số lượng TuCoin không hợp lệ")
+            self.transaction_amount_entry.focus()
+            return
+
+        if amount <= 0:
+            messagebox.showerror("Lỗi", "Số lượng TuCoin phải lớn hơn 0")
+            self.transaction_amount_entry.focus()
+            return
+
+        # 4. Kiểm tra địa chỉ người nhận
+        if receiver == wallet.address:
+            messagebox.showerror("Lỗi", "Không thể gửi TuCoin cho chính mình")
+            self.transaction_to_entry.focus()
+            return
+
+        # 5. Kiểm tra số dư
+        balance = self.blockchain.get_balance(wallet.address)
+        if amount > balance:
+            messagebox.showerror(
+                "Số dư không đủ", 
+                f"Số dư hiện tại: {balance} TuCoin\n"
+                f"Số lượng cần gửi: {amount} TuCoin\n"
+                f"Còn thiếu: {amount - balance} TuCoin"
+            )
+            return
+
+        # 6. Xác nhận giao dịch
+        if not messagebox.askyesno(
+            "Xác nhận giao dịch",
+            f"Bạn có chắc chắn muốn gửi {amount} TuCoin đến:\n{receiver}?"
+        ):
+            return
+
+        # 7. Thực hiện giao dịch
+        try:
+            # Hiển thị trạng thái "Đang xử lý"
+            self.transaction_status_label["text"] = "Đang xử lý giao dịch..."
+            self.root.update()
+
             success = self.node.add_transaction(wallet.address, receiver, amount)
-            
+
             if success:
                 # Xóa form
                 self.transaction_to_entry.delete(0, tk.END)
                 self.transaction_amount_entry.delete(0, tk.END)
                 
-                messagebox.showinfo("Thành công", f"Đã gửi {amount} TuCoin đến {receiver}")
+                # Hiển thị thông báo thành công
+                messagebox.showinfo(
+                    "Giao dịch thành công",
+                    f"Đã gửi: {amount} TuCoin\n"
+                    f"Đến: {receiver}\n\n"
+                    f"Số dư còn lại: {balance - amount} TuCoin"
+                )
+                
+                # Cập nhật UI
                 self.update_ui()
+                self.update_transaction_history()
             else:
-                messagebox.showerror("Lỗi", "Không thể gửi giao dịch")
-        
-        except ValueError as e:
-            messagebox.showerror("Lỗi", str(e))
+                messagebox.showerror(
+                    "Giao dịch thất bại",
+                    "Không thể thực hiện giao dịch.\n"
+                    "Vui lòng thử lại sau."
+                )
+        except Exception as e:
+            messagebox.showerror(
+                "Lỗi giao dịch",
+                f"Đã xảy ra lỗi khi thực hiện giao dịch:\n{str(e)}"
+            )
+        finally:
+            # Xóa trạng thái "Đang xử lý"
+            self.transaction_status_label["text"] = ""
 
     def show_block_details(self, event):
         """Hiển thị chi tiết của khối được chọn."""
@@ -642,34 +801,23 @@ class TuCoinGUI:
         self.blocks_tree.bind("<Double-1>", self.show_block_details)
 
     def create_mining_tab(self):
-        """Tạo tab Đào coin."""
+        """Tạo tab đào coin."""
         # Frame chính
         main_frame = ttk.Frame(self.mining_frame, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
-
+        
         # Frame thông tin
-        info_frame = ttk.LabelFrame(main_frame, text="Thông tin đào coin", padding=10)
+        info_frame = ttk.LabelFrame(main_frame, text="Thông tin đào", padding=10)
         info_frame.pack(fill=tk.X, pady=5)
-
-        # Địa chỉ ví nhận thưởng
-        address_frame = ttk.Frame(info_frame)
-        address_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(address_frame, text="Địa chỉ ví:").pack(side=tk.LEFT, padx=5)
-        self.mining_address_label = ttk.Label(address_frame, text="Chưa chọn ví")
-        self.mining_address_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
+        
+        ttk.Label(info_frame, text="Địa chỉ ví:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.mining_address_label = ttk.Label(info_frame, text="Chưa chọn ví")
+        self.mining_address_label.grid(row=0, column=1, sticky=tk.W, pady=2)
+        
         # Frame điều khiển
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(fill=tk.X, pady=10)
-
-        # Nút đào một khối
-        self.mine_button = ttk.Button(
-            control_frame, 
-            text="Đào một khối", 
-            command=self.mine_block
-        )
-        self.mine_button.pack(side=tk.LEFT, padx=5)
-
+        
         # Nút bắt đầu/dừng đào tự động
         self.start_mining_button = ttk.Button(
             control_frame, 
@@ -679,29 +827,36 @@ class TuCoinGUI:
         self.start_mining_button.pack(side=tk.LEFT, padx=5)
 
     def toggle_auto_mining(self):
-        """Bắt đầu/dừng đào tự động."""
+        """Bật/tắt chế độ đào tự động."""
         wallet = self.wallet_manager.get_current_wallet()
         if not wallet:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ví trước")
+            messagebox.showwarning("Cảnh báo", "Vui lòng tạo hoặc tải ví trước")
             return
 
         if not self.auto_mining:
             # Bắt đầu đào tự động
             self.auto_mining = True
             self.start_mining_button["text"] = "Dừng đào tự động"
-            self.mine_button["state"] = "disabled"
             
             def auto_mining_thread():
                 while self.auto_mining and self.running:
                     try:
-                        success = self.node.mine_block(wallet.address)
-                        if success:
-                            # Cập nhật UI trong main thread
+                        new_block = self.node.mine_block(wallet.address)
+                        if new_block:
                             self.root.after(0, self.update_ui)
+                        elif not self.auto_mining:  # Kiểm tra nếu đã dừng
+                            break
                         time.sleep(1)  # Đợi 1 giây trước khi đào khối tiếp
                     except Exception as e:
-                        logger.error(f"Lỗi khi đào tự động: {e}")
-                        time.sleep(5)  # Đợi lâu hơn nếu có lỗi
+                        logger.error(f"Lỗi trong quá trình đào tự động: {e}")
+                        self.auto_mining = False
+                        break
+                
+                # Kích hoạt lại nút khi dừng đào tự động
+                self.root.after(0, lambda: self.start_mining_button.configure(
+                    text="Bắt đầu đào tự động",
+                    state="normal"
+                ))
             
             self.auto_mining_thread = threading.Thread(
                 target=auto_mining_thread, 
@@ -711,10 +866,8 @@ class TuCoinGUI:
         else:
             # Dừng đào tự động
             self.auto_mining = False
+            self.node.blockchain.stop_mining()
             self.start_mining_button["text"] = "Bắt đầu đào tự động"
-            self.mine_button["state"] = "normal"
-            if self.auto_mining_thread:
-                self.auto_mining_thread.join()
 
     def update_ui(self):
         """Cập nhật toàn bộ giao diện."""
@@ -732,11 +885,9 @@ class TuCoinGUI:
         # Cập nhật tab Mining
         if wallet:
             self.mining_address_label["text"] = wallet.address
-            self.mine_button["state"] = "normal"
             self.start_mining_button["state"] = "normal"
         else:
             self.mining_address_label["text"] = "Chưa chọn ví"
-            self.mine_button["state"] = "disabled"
             self.start_mining_button["state"] = "disabled"
 
         # Cập nhật tab Transaction
@@ -767,9 +918,7 @@ class TuCoinGUI:
         self.overview_peers_label["text"] = str(peers_count)
         
         # Cập nhật danh sách peers
-        self.peers_listbox.delete(0, tk.END)
-        for peer in self.node.peers:
-            self.peers_listbox.insert(tk.END, peer)
+        self.update_network_status()
         
         # Cập nhật danh sách khối
         self.blocks_tree.delete(*self.blocks_tree.get_children())
@@ -854,6 +1003,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 

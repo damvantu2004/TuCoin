@@ -2,7 +2,8 @@ import hashlib
 import json
 import os
 import logging
-from time import time
+import time
+import threading
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -77,12 +78,21 @@ class Block:
 class Blockchain:
     """Quản lý blockchain TuCoin."""
     
-    def __init__(self, difficulty: int = 4):
-        """Khởi tạo blockchain mới."""
-        self.chain: List[Block] = []
-        self.pending_transactions: List[Dict] = []
-        self.difficulty = difficulty
-        self.data_file = "blockchain_data.json"
+    def __init__(self, difficulty: int = 5):  # Đặt số lượng số 0 ở đây
+        """
+        Khởi tạo blockchain mới.
+        
+        Args:
+            difficulty: Số lượng số 0 đầu tiên trong hash (độ khó cố định)
+        """
+        self.chain: List[Block] = []    # Danh sách các khối
+        self.pending_transactions: List[Dict] = []  # Danh sách các giao dịch đang chờ
+        self.difficulty = difficulty  # Độ khó cố định
+        self.data_file = "blockchain_data.json"  # Tên file lưu blockchain
+        # Thêm flag để kiểm soát quá trình đào
+        self._stop_mining = False      # Flag để dừng đào
+        self.chain_lock = threading.Lock()
+        self.mining_lock = threading.Lock()
         
         # Tải blockchain từ file nếu có
         if os.path.exists(self.data_file):
@@ -127,7 +137,7 @@ class Blockchain:
             
             # Tải các giao dịch đang chờ
             self.pending_transactions = data.get("pending_transactions", [])
-            self.difficulty = data.get("difficulty", 4)
+            self.difficulty = data.get("difficulty", 5)  # Sử dụng độ khó từ file
             
         except Exception as e:
             logger.error(f"Lỗi khi tải blockchain: {e}")
@@ -137,7 +147,7 @@ class Blockchain:
         """Tạo khối đầu tiên trong blockchain."""
         genesis_block = Block(
             index=0,
-            timestamp=time(),
+            timestamp=time.time(),
             transactions=[],
             proof=0,
             previous_hash="0"
@@ -150,83 +160,168 @@ class Blockchain:
         return self.chain[-1]
     
     def add_transaction(self, sender: str, receiver: str, amount: float) -> bool:
-        """Thêm giao dịch mới."""
-        success = super().add_transaction(sender, receiver, amount)
-        if success:
-            # Lưu blockchain sau khi thêm giao dịch
-            self.save_to_file()
-        return success
-
-    def proof_of_work(self, last_proof: int) -> int:
         """
-        Thuật toán Proof of Work.
-        Tìm một số (nonce) sao cho hash của nó với proof trước đó
-        có số lượng số 0 đầu tiên bằng độ khó.
+        Thêm giao dịch mới vào danh sách giao dịch đang chờ.
         
         Args:
-            last_proof: Proof của khối trước đó
+            sender: Địa chỉ người gửi
+            receiver: Địa chỉ người nhận
+            amount: Số lượng TuCoin
             
         Returns:
-            Giá trị nonce thỏa mãn điều kiện
+            True nếu giao dịch hợp lệ và được thêm vào
+        """
+        # Kiểm tra số dư của người gửi (trừ khi là hệ thống)
+        if sender != "0" and self.get_balance(sender) < amount:
+            logger.warning(f"Số dư không đủ: {sender} chỉ có {self.get_balance(sender)} TuCoin")
+            return False
+        
+        # Tạo giao dịch mới
+        transaction = {
+            "sender": sender,
+            "receiver": receiver,
+            "amount": amount,
+            "timestamp": time.time()
+        }
+        
+        # Thêm vào danh sách giao dịch đang chờ
+        self.pending_transactions.append(transaction)
+        
+        # Lưu blockchain sau khi thêm giao dịch
+        self.save_to_file()
+        
+        return True
+
+    def proof_of_work(self, previous_hash: str, block_data: Dict) -> Optional[int]:
+        """
+        Thuật toán Proof of Work với khả năng dừng.
+        Returns None nếu quá trình bị dừng.
         """
         proof = 0
-        while not self.valid_proof(last_proof, proof):
-            proof += 1
+        start_time = time.time()
         
-        return proof
-    
-    def valid_proof(self, last_proof: int, proof: int) -> bool:
+        logger.info(f"Bắt đầu đào khối với độ khó {self.difficulty}...")
+        
+        while not self._stop_mining:
+            block_with_proof = block_data.copy()
+            block_with_proof["proof"] = proof
+            block_with_proof["previous_hash"] = previous_hash
+            
+            block_string = json.dumps(block_with_proof, sort_keys=True).encode()
+            hash_result = hashlib.sha256(block_string).hexdigest()
+            
+            if hash_result[:self.difficulty] == '0' * self.difficulty:
+                elapsed = time.time() - start_time
+                logger.info(f"Đã tìm thấy nonce hợp lệ: {proof} sau {elapsed:.2f} giây")
+                return proof
+            
+            proof += 1
+            
+            # Log và nhường CPU định kỳ
+            if proof % 100000 == 0:
+                elapsed = time.time() - start_time
+                logger.info(f"Đã thử {proof:,} nonce trong {elapsed:.2f} giây")
+                time.sleep(0.001)
+        
+        logger.info("Đã dừng quá trình đào")
+        return None
+
+    def valid_proof(self, previous_hash: str, block_data: Dict, proof: int) -> bool:
         """
         Kiểm tra xem proof có hợp lệ không.
         
         Args:
-            last_proof: Proof của khối trước đó
-            proof: Proof hiện tại cần kiểm tra
+            previous_hash: Hash của khối trước đó
+            block_data: Dữ liệu của khối
+            proof: Proof cần kiểm tra
             
         Returns:
             True nếu hash bắt đầu bằng số lượng số 0 bằng độ khó
         """
-        guess = f'{last_proof}{proof}'.encode()
-        guess_hash = hashlib.sha256(guess).hexdigest()
+        # Tạo dữ liệu khối với proof
+        block_with_proof = block_data.copy()
+        block_with_proof["proof"] = proof
+        block_with_proof["previous_hash"] = previous_hash
         
-        return guess_hash[:self.difficulty] == '0' * self.difficulty
+        # Tính hash của khối
+        block_string = json.dumps(block_with_proof, sort_keys=True).encode()
+        hash_result = hashlib.sha256(block_string).hexdigest()
+        
+        return hash_result[:self.difficulty] == '0' * self.difficulty
     
-    def mine_block(self, miner_address: str) -> Block:
-        """Đào một khối mới."""
-        # Thêm giao dịch phần thưởng
-        self.pending_transactions.append({
-            "sender": "0",  # "0" đại diện cho hệ thống
-            "receiver": miner_address,
-            "amount": 100.0,  # Phần thưởng 100 TuCoin
-            "timestamp": time()
-        })
+    def mine_block(self, miner_address: str) -> Optional[Block]:
+        """
+        Đào một khối mới với khả năng dừng.
+        Returns None nếu quá trình bị dừng.
+        """
+        with self.mining_lock:
+            self._stop_mining = False
+            
+            # Thêm giao dịch phần thưởng
+            transactions = self.pending_transactions.copy()
+            transactions.append({
+                "sender": "0",  # "0" đại diện cho hệ thống
+                "receiver": miner_address,
+                "amount": 100.0,  # Phần thưởng 100 TuCoin
+                "timestamp": time.time()
+            })
+            
+            # Chuẩn bị dữ liệu khối
+            block_data = {
+                "index": len(self.chain),
+                "timestamp": time.time(),
+                "transactions": transactions
+            }
+            
+            # Lấy hash của khối trước đó
+            previous_hash = self.last_block.hash
+            
+            # Bắt đầu đào
+            start_time = time.time()
+            proof = self.proof_of_work(previous_hash, block_data)
+            
+            if proof is None:
+                return None
+            
+            mining_time = time.time() - start_time
+            
+            # Tạo khối mới
+            new_block = Block(
+                index=block_data["index"],
+                timestamp=block_data["timestamp"],
+                transactions=block_data["transactions"],
+                proof=proof,
+                previous_hash=previous_hash
+            )
+            
+            # Xóa các giao dịch đã được thêm vào khối
+            self.pending_transactions = []
+            
+            # Thêm khối mới vào chuỗi
+            with self.chain_lock:
+                self.chain.append(new_block)
+            
+            # Ghi log thời gian đào
+            self.adjust_difficulty(mining_time)
+            
+            # Lưu blockchain sau khi đào khối thành công
+            self.save_to_file()
+            
+            return new_block
+
+    def stop_mining(self):
+        """Dừng quá trình đào hiện tại."""
+        self._stop_mining = True
+
+    def adjust_difficulty(self, mining_time: float) -> None:
+        """
+        Ghi log thời gian đào khối mà không điều chỉnh độ khó.
         
-        # Lấy proof của khối trước đó
-        last_proof = self.last_block.proof
-        
-        # Tìm proof mới
-        proof = self.proof_of_work(last_proof)
-        
-        # Tạo khối mới
-        new_block = Block(
-            index=len(self.chain),
-            timestamp=time(),
-            transactions=self.pending_transactions.copy(),
-            proof=proof,
-            previous_hash=self.last_block.hash
-        )
-        
-        # Xóa các giao dịch đã được thêm vào khối
-        self.pending_transactions = []
-        
-        # Thêm khối mới vào chuỗi
-        self.chain.append(new_block)
-        
-        # Lưu blockchain sau khi đào khối thành công
-        self.save_to_file()
-        
-        return new_block
-    
+        Args:
+            mining_time: Thời gian đã dùng để đào khối vừa rồi (giây)
+        """
+        logger.info(f"Thời gian đào khối: {mining_time:.2f} giây")
+
     def is_chain_valid(self) -> bool:
         """
         Kiểm tra tính hợp lệ của toàn bộ blockchain.
@@ -240,14 +335,23 @@ class Blockchain:
             
             # Kiểm tra hash của khối hiện tại
             if current_block.hash != current_block.calculate_hash():
+                logger.error(f"Hash không khớp ở khối {i}")
                 return False
             
             # Kiểm tra liên kết giữa các khối
             if current_block.previous_hash != previous_block.hash:
+                logger.error(f"Liên kết hash không khớp ở khối {i}")
                 return False
             
             # Kiểm tra proof of work
-            if not self.valid_proof(previous_block.proof, current_block.proof):
+            block_data = {
+                "index": current_block.index,
+                "timestamp": current_block.timestamp,
+                "transactions": current_block.transactions
+            }
+            
+            if not self.valid_proof(current_block.previous_hash, block_data, current_block.proof):
+                logger.error(f"Proof of work không hợp lệ ở khối {i}")
                 return False
         
         return True
@@ -272,6 +376,13 @@ class Blockchain:
                     balance -= transaction["amount"]
                 if transaction["receiver"] == address:
                     balance += transaction["amount"]
+        
+        # Kiểm tra cả các giao dịch đang chờ
+        for transaction in self.pending_transactions:
+            if transaction["sender"] == address:
+                balance -= transaction["amount"]
+            if transaction["receiver"] == address:
+                balance += transaction["amount"]
         
         return balance
     
@@ -328,21 +439,51 @@ class Blockchain:
         
         return False
 
-
-if __name__ == "__main__":
-    # Kiểm tra nhanh
-    blockchain = Blockchain()
-    
-    # Thêm một số giao dịch
-    blockchain.add_transaction("address1", "address2", 10)
-    blockchain.add_transaction("address2", "address3", 5)
-    
-    # Đào khối
-    miner_address = "miner_address"
-    new_block = blockchain.mine_block(miner_address)
-    
-    print(f"Đã đào khối mới: {new_block.hash}")
-    print(f"Số dư của người đào: {blockchain.get_balance(miner_address)}")
-
+    def add_block(self, block: Block) -> bool:
+        """Thêm block với xử lý đồng thời."""
+        with self.chain_lock:
+            # Xác thực block
+            if not self._validate_block(block):
+                return False
+            
+            # Kiểm tra index
+            if block.index != len(self.chain):
+                # Xử lý fork nếu cần
+                if block.index < len(self.chain):
+                    self._handle_potential_fork(block)
+                return False
+            
+            # Thêm block vào chain
+            self.chain.append(block)
+            self.save_to_file()
+            return True
+        
+    def _validate_block(self, block: Block) -> bool:
+        """Xác thực toàn diện một block."""
+        # Kiểm tra cấu trúc
+        if not self._validate_block_structure(block):
+            return False
+            
+        # Kiểm tra proof of work
+        if not self._validate_proof_of_work(block):
+            return False
+            
+        # Kiểm tra các giao dịch trong block
+        if not self._validate_block_transactions(block):
+            return False
+            
+        return True
+        
+    def _handle_potential_fork(self, block: Block) -> None:
+        """Xử lý khi phát hiện fork."""
+        # Tạo nhánh mới
+        new_fork = self.chain[:-1] + [block]
+        
+        # So sánh độ khó tích lũy
+        if self._calculate_total_difficulty(new_fork) > self._calculate_total_difficulty(self.chain):
+            # Chuyển sang nhánh mới
+            self.chain = new_fork
+            # Cập nhật giao dịch pool
+            self._update_transaction_pool()
 
 
