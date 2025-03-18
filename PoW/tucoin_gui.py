@@ -579,11 +579,10 @@ class TuCoinGUI:
 
     def send_transaction(self):
         """Gửi giao dịch mới."""
-        wallet = self.wallet_manager.get_current_wallet()
-        if not wallet:
-            messagebox.showwarning("Cảnh báo", "Vui lòng tạo hoặc tải ví trước")
+        if not self.wallet:
+            messagebox.showerror("Lỗi", "Vui lòng tạo hoặc tải ví trước")
             return
-            
+        
         receiver = self.transaction_to_entry.get()
         amount_str = self.transaction_amount_entry.get()
         
@@ -591,23 +590,26 @@ class TuCoinGUI:
             amount = float(amount_str)
             if amount <= 0:
                 raise ValueError("Số lượng phải lớn hơn 0")
-                
+            
             # Kiểm tra số dư
-            balance = self.blockchain.get_balance(wallet.address)
+            balance = self.blockchain.get_balance(self.wallet.address)
             if amount > balance:
                 messagebox.showerror("Lỗi", f"Số dư không đủ (hiện có {balance} TuCoin)")
                 return
-                
+            
             # Tạo và gửi giao dịch
-            self.node.create_transaction(wallet.address, receiver, amount)
+            success = self.node.add_transaction(self.wallet.address, receiver, amount)
             
-            # Xóa form
-            self.transaction_to_entry.delete(0, tk.END)
-            self.transaction_amount_entry.delete(0, tk.END)
-            
-            messagebox.showinfo("Thành công", f"Đã gửi {amount} TuCoin đến {receiver}")
-            self.update_ui()
-            
+            if success:
+                # Xóa form
+                self.transaction_to_entry.delete(0, tk.END)
+                self.transaction_amount_entry.delete(0, tk.END)
+                
+                messagebox.showinfo("Thành công", f"Đã gửi {amount} TuCoin đến {receiver}")
+                self.update_ui()
+            else:
+                messagebox.showerror("Lỗi", "Không thể gửi giao dịch")
+        
         except ValueError as e:
             messagebox.showerror("Lỗi", str(e))
 
