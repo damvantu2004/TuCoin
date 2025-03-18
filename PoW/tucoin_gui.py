@@ -725,9 +725,14 @@ def main():
     
     # Tự động lấy IP nếu không được chỉ định
     host = args.host if args.host else get_local_ip()
-    print(f"Node IP address: {host}")
+    port = args.port
     
-    app = TuCoinGUI(host=host, port=args.port)
+    print("="*50)
+    print(f"Node address: {host}:{port}")
+    print("Sử dụng địa chỉ này để kết nối từ máy khác")
+    print("="*50)
+    
+    app = TuCoinGUI(host=host, port=port)
     app.root.mainloop()
 
 if __name__ == "__main__":
