@@ -337,32 +337,20 @@ class TuCoinGUI:
         main_frame = ttk.Frame(self.network_frame, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Thông tin node
-        node_info_frame = ttk.LabelFrame(main_frame, text="Thông tin node", padding=10)
-        node_info_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(node_info_frame, text="Địa chỉ IP:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.node_ip_label = ttk.Label(node_info_frame, text=self.host)
-        self.node_ip_label.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(node_info_frame, text="Cổng:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.node_port_label = ttk.Label(node_info_frame, text=str(self.port))
-        self.node_port_label.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        # Kết nối đến node khác
-        connect_frame = ttk.LabelFrame(main_frame, text="Kết nối đến node khác", padding=10)
+        # Kết nối node mới
+        connect_frame = ttk.LabelFrame(main_frame, text="Kết nối node mới", padding=10)
         connect_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(connect_frame, text="Địa chỉ IP:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.connect_ip_entry = ttk.Entry(connect_frame, width=20)
-        self.connect_ip_entry.grid(row=0, column=1, sticky=tk.W, pady=2)
-        self.connect_ip_entry.insert(0, "127.0.0.1")
+        self.peer_host_entry = ttk.Entry(connect_frame, width=30)
+        self.peer_host_entry.grid(row=0, column=1, sticky=tk.W, pady=2)
         
         ttk.Label(connect_frame, text="Cổng:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.connect_port_entry = ttk.Entry(connect_frame, width=10)
-        self.connect_port_entry.grid(row=1, column=1, sticky=tk.W, pady=2)
+        self.peer_port_entry = ttk.Entry(connect_frame, width=10)
+        self.peer_port_entry.grid(row=1, column=1, sticky=tk.W, pady=2)
         
-        self.connect_button = ttk.Button(connect_frame, text="Kết nối", command=self.connect_to_node)
+        # Sửa tên phương thức từ connect_to_node thành connect_to_peer
+        self.connect_button = ttk.Button(connect_frame, text="Kết nối", command=self.connect_to_peer)
         self.connect_button.grid(row=2, column=1, sticky=tk.W, pady=10)
         
         # Danh sách node đã kết nối
@@ -513,20 +501,36 @@ class TuCoinGUI:
             self.root.clipboard_append(wallet.address)
             messagebox.showinfo("Thành công", "Đã sao chép địa chỉ ví vào clipboard")
 
-    def connect_to_node(self):
-        """Kết nối đến node khác."""
-        host = self.connect_ip_entry.get()
-        port = self.connect_port_entry.get()
+    def connect_to_peer(self):
+        """Kết nối đến một node khác."""
+        host = self.peer_host_entry.get()
+        port_str = self.peer_port_entry.get()
         
         try:
-            port = int(port)
-            if self.node.connect_to_peer(f"{host}:{port}"):
-                messagebox.showinfo("Thành công", f"Đã kết nối đến node {host}:{port}")
+            port = int(port_str)
+            if self.node.connect_to_peer(host, port):
+                messagebox.showinfo("Thành công", f"Đã kết nối thành công đến node {host}:{port}")
+                # Xóa form
+                self.peer_host_entry.delete(0, tk.END)
+                self.peer_port_entry.delete(0, tk.END)
+                # Cập nhật UI
                 self.update_ui()
+                # Cập nhật danh sách peers
+                self.update_peers_list()
             else:
                 messagebox.showerror("Lỗi", f"Không thể kết nối đến node {host}:{port}")
         except ValueError:
-            messagebox.showerror("Lỗi", "Cổng không hợp lệ")
+            messagebox.showerror("Lỗi", "Port phải là số nguyên")
+
+    def update_peers_list(self):
+        """Cập nhật danh sách peers trong UI."""
+        # Xóa danh sách cũ
+        self.peers_listbox.delete(0, tk.END)
+        # Thêm các peers mới
+        for peer in self.node.peers:
+            self.peers_listbox.insert(tk.END, peer)
+        # Cập nhật label số lượng peers
+        self.overview_peers_label.config(text=str(len(self.node.peers)))
 
     def mine_block(self):
         """Đào khối mới."""
