@@ -60,8 +60,10 @@ class Node:
             return False
     
     def stop(self) -> None:
-        """Dừng node."""
+        """Dừng node và lưu dữ liệu."""
         self.running = False
+        # Lưu blockchain trước khi dừng
+        self.blockchain.save_to_file()
         self.server_socket.close()
         logger.info("Node đã dừng")
     
@@ -173,76 +175,23 @@ class Node:
         self._broadcast_message(message)
     
     def mine_block(self, miner_address: str) -> Optional[Block]:
-        """
-        Đào một khối mới và phát sóng nó đến mạng.
-        
-        Args:
-            miner_address: Địa chỉ của người đào để nhận phần thưởng
-            
-        Returns:
-            Khối mới nếu đào thành công, None nếu không
-        """
+        """Đào khối mới."""
         try:
-            # Đào khối mới
             new_block = self.blockchain.mine_block(miner_address)
-            
             # Phát sóng khối mới
             self.broadcast_block(new_block)
-            
-            logger.info(f"Đã đào khối mới: {new_block.hash}")
-            
-            # Cập nhật UI nếu có callback
-            if self.update_callback:
-                self.update_callback()
-            
             return new_block
         except Exception as e:
             logger.error(f"Lỗi khi đào khối: {e}")
             return None
     
     def add_transaction(self, sender: str, receiver: str, amount: float) -> bool:
-        """
-        Thêm một giao dịch mới và phát sóng nó đến mạng.
-        
-        Args:
-            sender: Địa chỉ người gửi
-            receiver: Địa chỉ người nhận
-            amount: Số lượng TuCoin
-            
-        Returns:
-            True nếu thêm thành công, False nếu không
-        """
-        try:
-            # Kiểm tra số dư
-            balance = self.blockchain.get_balance(sender)
-            if balance < amount:
-                logger.warning(f"Số dư không đủ: {balance} < {amount}")
-                return False
-            
-            # Thêm giao dịch vào pending
-            self.blockchain.add_transaction(sender, receiver, amount)
-            
-            # Tạo đối tượng giao dịch để phát sóng
-            transaction = {
-                "sender": sender,
-                "receiver": receiver,
-                "amount": amount,
-                "timestamp": time.time()
-            }
-            
+        """Thêm và phát sóng giao dịch mới."""
+        success = self.blockchain.add_transaction(sender, receiver, amount)
+        if success:
             # Phát sóng giao dịch
-            self.broadcast_transaction(transaction)
-            
-            logger.info(f"Đã thêm và phát sóng giao dịch: {sender} -> {receiver}: {amount}")
-            
-            # Cập nhật UI nếu có callback
-            if self.update_callback:
-                self.update_callback()
-            
-            return True
-        except Exception as e:
-            logger.error(f"Lỗi khi thêm giao dịch: {e}")
-            return False
+            self.broadcast_transaction(sender, receiver, amount)
+        return success
     
     def set_update_callback(self, callback) -> None:
         """

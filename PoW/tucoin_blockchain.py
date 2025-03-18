@@ -1,8 +1,14 @@
 import hashlib
 import json
+import os
+import logging
 from time import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+# Thiết lập logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 class Block:
     """Đại diện cho một khối trong blockchain TuCoin."""
@@ -39,11 +45,11 @@ class Block:
         return hashlib.sha256(block_string).hexdigest()
     
     def to_dict(self) -> Dict[str, Any]:
-        """Chuyển đổi khối thành dictionary để serialize."""
+        """Chuyển đổi block thành dictionary."""
         return {
             "index": self.index,
             "timestamp": self.timestamp,
-            "transactions": self.transactions,
+            "transactions": [tx.copy() for tx in self.transactions],
             "proof": self.proof,
             "previous_hash": self.previous_hash,
             "hash": self.hash
@@ -51,15 +57,20 @@ class Block:
     
     @classmethod
     def from_dict(cls, block_dict: Dict[str, Any]) -> 'Block':
-        """Tạo khối từ dictionary."""
+        """Tạo block từ dictionary."""
+        # Tạo bản sao của transactions để tránh tham chiếu
+        transactions = block_dict["transactions"].copy() if block_dict.get("transactions") else []
+        
         block = cls(
             index=block_dict["index"],
             timestamp=block_dict["timestamp"],
-            transactions=block_dict["transactions"],
+            transactions=transactions,
             proof=block_dict["proof"],
             previous_hash=block_dict["previous_hash"]
         )
-        block.hash = block_dict["hash"]
+        # Gán hash trực tiếp nếu có
+        if "hash" in block_dict:
+            block.hash = block_dict["hash"]
         return block
 
 
@@ -67,19 +78,61 @@ class Blockchain:
     """Quản lý blockchain TuCoin."""
     
     def __init__(self, difficulty: int = 4):
-        """
-        Khởi tạo blockchain mới.
-        
-        Args:
-            difficulty: Độ khó của thuật toán PoW (số lượng số 0 đầu tiên)
-        """
+        """Khởi tạo blockchain mới."""
         self.chain: List[Block] = []
         self.pending_transactions: List[Dict] = []
         self.difficulty = difficulty
+        self.data_file = "blockchain_data.json"
         
-        # Tạo khối khởi đầu (genesis block)
-        self.create_genesis_block()
-    
+        # Tải blockchain từ file nếu có
+        if os.path.exists(self.data_file):
+            try:
+                self.load_from_file()
+            except Exception as e:
+                logger.error(f"Lỗi khi tải blockchain: {e}")
+                self.create_genesis_block()
+        else:
+            self.create_genesis_block()
+
+    def save_to_file(self) -> None:
+        """Lưu blockchain vào file."""
+        data = self.to_dict()
+        try:
+            with open(self.data_file, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error(f"Lỗi khi lưu blockchain: {e}")
+
+    def load_from_file(self) -> None:
+        """Tải blockchain từ file."""
+        try:
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+            
+            # Reset chain hiện tại
+            self.chain = []
+            self.pending_transactions = []
+            
+            # Tải các block
+            for block_data in data["chain"]:
+                block = Block(
+                    index=block_data["index"],
+                    timestamp=block_data["timestamp"],
+                    transactions=block_data["transactions"],
+                    proof=block_data["proof"],
+                    previous_hash=block_data["previous_hash"]
+                )
+                block.hash = block_data["hash"]
+                self.chain.append(block)
+            
+            # Tải các giao dịch đang chờ
+            self.pending_transactions = data.get("pending_transactions", [])
+            self.difficulty = data.get("difficulty", 4)
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi tải blockchain: {e}")
+            self.create_genesis_block()
+
     def create_genesis_block(self) -> None:
         """Tạo khối đầu tiên trong blockchain."""
         genesis_block = Block(
@@ -96,27 +149,14 @@ class Blockchain:
         """Trả về khối cuối cùng trong blockchain."""
         return self.chain[-1]
     
-    def add_transaction(self, sender: str, receiver: str, amount: float) -> int:
-        """
-        Thêm một giao dịch mới vào danh sách chờ.
-        
-        Args:
-            sender: Địa chỉ người gửi
-            receiver: Địa chỉ người nhận
-            amount: Số lượng TuCoin
-            
-        Returns:
-            Index của khối sẽ chứa giao dịch này
-        """
-        self.pending_transactions.append({
-            "sender": sender,
-            "receiver": receiver,
-            "amount": amount,
-            "timestamp": time()
-        })
-        
-        return self.last_block.index + 1
-    
+    def add_transaction(self, sender: str, receiver: str, amount: float) -> bool:
+        """Thêm giao dịch mới."""
+        success = super().add_transaction(sender, receiver, amount)
+        if success:
+            # Lưu blockchain sau khi thêm giao dịch
+            self.save_to_file()
+        return success
+
     def proof_of_work(self, last_proof: int) -> int:
         """
         Thuật toán Proof of Work.
@@ -152,15 +192,7 @@ class Blockchain:
         return guess_hash[:self.difficulty] == '0' * self.difficulty
     
     def mine_block(self, miner_address: str) -> Block:
-        """
-        Đào một khối mới.
-        
-        Args:
-            miner_address: Địa chỉ của người đào để nhận phần thưởng
-            
-        Returns:
-            Khối mới đã được đào
-        """
+        """Đào một khối mới."""
         # Thêm giao dịch phần thưởng
         self.pending_transactions.append({
             "sender": "0",  # "0" đại diện cho hệ thống
@@ -189,6 +221,9 @@ class Blockchain:
         
         # Thêm khối mới vào chuỗi
         self.chain.append(new_block)
+        
+        # Lưu blockchain sau khi đào khối thành công
+        self.save_to_file()
         
         return new_block
     
@@ -244,24 +279,31 @@ class Blockchain:
         """Chuyển đổi blockchain thành dictionary để serialize."""
         return {
             "chain": [block.to_dict() for block in self.chain],
-            "pending_transactions": self.pending_transactions,
+            "pending_transactions": [tx.copy() for tx in self.pending_transactions],
             "difficulty": self.difficulty
         }
     
     @classmethod
     def from_dict(cls, blockchain_dict: Dict[str, Any]) -> 'Blockchain':
         """Tạo blockchain từ dictionary."""
-        blockchain = cls(difficulty=blockchain_dict["difficulty"])
+        blockchain = cls(difficulty=blockchain_dict.get("difficulty", 4))
         
         # Xóa khối genesis mặc định
         blockchain.chain = []
         
         # Thêm các khối từ dictionary
-        for block_dict in blockchain_dict["chain"]:
-            blockchain.chain.append(Block.from_dict(block_dict))
+        for block_dict in blockchain_dict.get("chain", []):
+            try:
+                block = Block.from_dict(block_dict)
+                blockchain.chain.append(block)
+            except Exception as e:
+                logger.error(f"Lỗi khi tạo block từ dict: {e}")
+                raise
         
         # Thêm các giao dịch đang chờ
-        blockchain.pending_transactions = blockchain_dict["pending_transactions"]
+        blockchain.pending_transactions = [
+            tx.copy() for tx in blockchain_dict.get("pending_transactions", [])
+        ]
         
         return blockchain
     
@@ -301,3 +343,6 @@ if __name__ == "__main__":
     
     print(f"Đã đào khối mới: {new_block.hash}")
     print(f"Số dư của người đào: {blockchain.get_balance(miner_address)}")
+
+
+

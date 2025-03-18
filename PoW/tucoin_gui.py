@@ -4,11 +4,16 @@ import socket
 import threading
 import time
 import argparse
+import logging
 from datetime import datetime
 
 from tucoin_blockchain import Blockchain
 from tucoin_node import Node
 from tucoin_wallet import WalletManager
+
+# Thiết lập logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('TuCoin-GUI')
 
 class TuCoinGUI:
     """Giao diện người dùng cho ứng dụng TuCoin."""
@@ -20,15 +25,30 @@ class TuCoinGUI:
         self.auto_mining = False
         self.auto_mining_thread = None
 
-        # Khởi tạo cửa sổ chính
+        # Khởi tạo blockchain trước
+        self.blockchain = Blockchain()
+        
+        # Khởi tạo các thành phần khác
+        self.wallet_manager = WalletManager()
+        self.node = Node(host=host, port=port, blockchain=self.blockchain)
+        
+        # Tạo giao diện
         self.root = tk.Tk()
         self.root.title("TuCoin")
         self.root.geometry("800x600")
         
-        # Khởi tạo notebook (tabbed interface)
+        # Tạo các tab và components
+        self.create_gui()
+        
+        # Xử lý khi đóng cửa sổ
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def create_gui(self):
+        """Tạo giao diện người dùng."""
+        # Tạo notebook (tabbed interface)
         self.notebook = ttk.Notebook(self.root)
         
-        # Khởi tạo các frame cho từng tab
+        # Tạo các frame cho từng tab
         self.overview_frame = ttk.Frame(self.notebook)
         self.wallet_frame = ttk.Frame(self.notebook)
         self.transaction_frame = ttk.Frame(self.notebook)
@@ -36,23 +56,6 @@ class TuCoinGUI:
         self.network_frame = ttk.Frame(self.notebook)
         self.blockchain_frame = ttk.Frame(self.notebook)
         
-        # Khởi tạo các thành phần chính
-        self.blockchain = Blockchain()
-        self.node = Node(host=host, port=port, blockchain=self.blockchain)
-        self.wallet_manager = WalletManager()
-        
-        # Tạo giao diện
-        self.create_gui()
-        
-        # Khởi động node và cập nhật UI
-        self.node.start()
-        threading.Thread(target=self.periodic_update, daemon=True).start()
-        
-        # Xử lý khi đóng cửa sổ
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)        
-    
-    def create_gui(self):
-        """Tạo giao diện người dùng."""
         # Thêm các tab vào notebook
         self.notebook.add(self.overview_frame, text="Tổng quan")
         self.notebook.add(self.wallet_frame, text="Ví")
@@ -182,6 +185,7 @@ class TuCoinGUI:
         if wallet:
             self.wallet_manager.current_wallet = wallet
             messagebox.showinfo("Thành công", f"Đã chọn ví: {wallet.address}")
+            # Cập nhật toàn bộ UI với ví hiện tại
             self.update_ui()
         else:
             messagebox.showerror("Lỗi", "Không thể tải ví đã chọn")
@@ -689,8 +693,15 @@ class TuCoinGUI:
             
             def auto_mining_thread():
                 while self.auto_mining and self.running:
-                    self.node.mine_block(wallet.address)
-                    time.sleep(1)  # Đợi 1 giây trước khi đào khối tiếp
+                    try:
+                        success = self.node.mine_block(wallet.address)
+                        if success:
+                            # Cập nhật UI trong main thread
+                            self.root.after(0, self.update_ui)
+                        time.sleep(1)  # Đợi 1 giây trước khi đào khối tiếp
+                    except Exception as e:
+                        logger.error(f"Lỗi khi đào tự động: {e}")
+                        time.sleep(5)  # Đợi lâu hơn nếu có lỗi
             
             self.auto_mining_thread = threading.Thread(
                 target=auto_mining_thread, 
@@ -706,20 +717,42 @@ class TuCoinGUI:
                 self.auto_mining_thread.join()
 
     def update_ui(self):
-        """Cập nhật giao diện người dùng."""
+        """Cập nhật toàn bộ giao diện."""
         wallet = self.wallet_manager.get_current_wallet()
         
-        # Cập nhật thông tin ví
+        # Cập nhật tab Overview
         if wallet:
-            address = wallet.address
-            balance = self.blockchain.get_balance(address)
-            
-            self.overview_address_label["text"] = address
+            self.overview_address_label["text"] = wallet.address
+            balance = self.blockchain.get_balance(wallet.address)
             self.overview_balance_label["text"] = f"{balance} TuCoin"
-            self.wallet_address_label["text"] = address
-            self.wallet_balance_label["text"] = f"{balance} TuCoin"
-            self.transaction_from_label["text"] = address
-            self.mining_address_label["text"] = address
+        else:
+            self.overview_address_label["text"] = "Chưa có ví"
+            self.overview_balance_label["text"] = "0 TuCoin"
+
+        # Cập nhật tab Mining
+        if wallet:
+            self.mining_address_label["text"] = wallet.address
+            self.mine_button["state"] = "normal"
+            self.start_mining_button["state"] = "normal"
+        else:
+            self.mining_address_label["text"] = "Chưa chọn ví"
+            self.mine_button["state"] = "disabled"
+            self.start_mining_button["state"] = "disabled"
+
+        # Cập nhật tab Transaction
+        if wallet:
+            self.transaction_from_label["text"] = wallet.address
+            self.transaction_to_entry["state"] = "normal"
+            self.transaction_amount_entry["state"] = "normal"
+            self.send_button["state"] = "normal"
+        else:
+            self.transaction_from_label["text"] = "Chưa chọn ví"
+            self.transaction_to_entry["state"] = "disabled"
+            self.transaction_amount_entry["state"] = "disabled"
+            self.send_button["state"] = "disabled"
+
+        # Cập nhật danh sách ví
+        self.update_wallets_list()
         
         # Cập nhật thông tin blockchain
         chain_length = len(self.blockchain.chain)
@@ -743,9 +776,9 @@ class TuCoinGUI:
         for block in self.blockchain.chain:
             self.blocks_tree.insert("", tk.END, values=(
                 block.index,
-                block.timestamp,
+                datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S'),
                 len(block.transactions),
-                block.hash
+                block.hash[:50] + "..." if len(block.hash) > 50 else block.hash
             ))
         
         # Cập nhật danh sách giao dịch đang chờ
@@ -755,7 +788,7 @@ class TuCoinGUI:
                 tx["sender"],
                 tx["receiver"],
                 f"{tx['amount']} TuCoin",
-                tx["timestamp"]
+                datetime.fromtimestamp(tx["timestamp"]).strftime('%Y-%m-%d %H:%M:%S')
             ))
 
     def periodic_update(self):
@@ -765,10 +798,27 @@ class TuCoinGUI:
             time.sleep(5)
 
     def on_close(self):
-        """Xử lý khi đóng ứng dụng."""
-        self.running = False
-        self.node.stop()
-        self.root.destroy()
+        """Xử lý khi đóng chương trình."""
+        try:
+            # Dừng đào tự động nếu đang chạy
+            self.auto_mining = False
+            
+            # Kiểm tra và join thread nếu tồn tại
+            if hasattr(self, 'auto_mining_thread') and self.auto_mining_thread is not None:
+                self.auto_mining_thread.join(timeout=1.0)  # Thêm timeout để tránh treo
+            
+            # Lưu blockchain
+            self.blockchain.save_to_file()
+            
+            # Dừng node
+            self.node.stop()
+            
+            # Đóng cửa sổ
+            self.root.destroy()
+            
+        except Exception as e:
+            logger.error(f"Lỗi khi đóng chương trình: {e}")
+            self.root.destroy()
 
 def get_local_ip():
     """Lấy địa chỉ IP local của máy."""
