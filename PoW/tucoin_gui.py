@@ -6,10 +6,22 @@ import argparse
 import os
 import json
 from typing import Optional, List, Dict, Any
+import socket
 
 from tucoin_blockchain import Blockchain, Block
 from tucoin_node import Node
 from tucoin_wallet import Wallet, WalletManager
+
+def get_local_ip():
+    """Lấy địa chỉ IP local của máy."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        return "127.0.0.1"
 
 class TuCoinGUI:
     """Giao diện người dùng cho ứng dụng TuCoin."""
@@ -706,12 +718,16 @@ class TuCoinGUI:
 def main():
     """Hàm main để khởi động ứng dụng."""
     parser = argparse.ArgumentParser(description="TuCoin GUI")
-    parser.add_argument("--host", default="127.0.0.1", help="Địa chỉ IP của node")
+    parser.add_argument("--host", default=None, help="Địa chỉ IP của node (mặc định: tự động)")
     parser.add_argument("--port", type=int, default=5000, help="Cổng lắng nghe")
     
     args = parser.parse_args()
     
-    app = TuCoinGUI(host=args.host, port=args.port)
+    # Tự động lấy IP nếu không được chỉ định
+    host = args.host if args.host else get_local_ip()
+    print(f"Node IP address: {host}")
+    
+    app = TuCoinGUI(host=host, port=args.port)
     app.root.mainloop()
 
 if __name__ == "__main__":
