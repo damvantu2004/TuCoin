@@ -1,122 +1,74 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
+import socket
 import threading
 import time
 import argparse
-import os
-import json
-from typing import Optional, List, Dict, Any
-import socket
-# aaa
-from tucoin_blockchain import Blockchain, Block
-from tucoin_node import Node
-from tucoin_wallet import Wallet, WalletManager
+from datetime import datetime
 
-def get_local_ip():
-    """Lấy địa chỉ IP local của máy."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
-    except Exception:
-        return "127.0.0.1"
+from tucoin_blockchain import Blockchain
+from tucoin_node import Node
+from tucoin_wallet import WalletManager
 
 class TuCoinGUI:
     """Giao diện người dùng cho ứng dụng TuCoin."""
     
     def __init__(self, host: str = '127.0.0.1', port: int = 5000):
-        """
-        Khởi tạo giao diện người dùng.
-        
-        Args:
-            host: Địa chỉ IP của node
-            port: Cổng lắng nghe
-        """
-        self.host = host
-        self.port = port
-        
-        # Khởi tạo wallet manager
-        self.wallet_manager = WalletManager()
-        
-        # Khởi tạo blockchain và node
-        self.blockchain = Blockchain()
-        self.node = Node(host=host, port=port, blockchain=self.blockchain)
-        
-        # Đặt callback cập nhật UI
-        self.node.set_update_callback(self.update_ui)
-        
+        """Khởi tạo giao diện người dùng."""
+        # Khởi tạo biến điều khiển
+        self.running = True
+        self.auto_mining = False
+        self.auto_mining_thread = None
+
         # Khởi tạo cửa sổ chính
         self.root = tk.Tk()
-        self.root.title(f"TuCoin - Node {host}:{port}")
-        self.root.geometry("1000x700")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.title("TuCoin")
+        self.root.geometry("800x600")
+        
+        # Khởi tạo notebook (tabbed interface)
+        self.notebook = ttk.Notebook(self.root)
+        
+        # Khởi tạo các frame cho từng tab
+        self.overview_frame = ttk.Frame(self.notebook)
+        self.wallet_frame = ttk.Frame(self.notebook)
+        self.transaction_frame = ttk.Frame(self.notebook)
+        self.mining_frame = ttk.Frame(self.notebook)
+        self.network_frame = ttk.Frame(self.notebook)
+        self.blockchain_frame = ttk.Frame(self.notebook)
+        
+        # Khởi tạo các thành phần chính
+        self.blockchain = Blockchain()
+        self.node = Node(host=host, port=port, blockchain=self.blockchain)
+        self.wallet_manager = WalletManager()
         
         # Tạo giao diện
         self.create_gui()
         
-        # Khởi động node
-        if not self.node.start():
-            messagebox.showerror("Lỗi", f"Không thể khởi động node tại {host}:{port}")
-            self.root.destroy()
-            return
-        
-        # Tải hoặc tạo ví
-        self.load_or_create_wallet()
-        
-        # Cập nhật UI lần đầu
-        self.update_ui()
-        
-        # Bắt đầu thread cập nhật UI định kỳ
-        self.running = True
+        # Khởi động node và cập nhật UI
+        self.node.start()
         threading.Thread(target=self.periodic_update, daemon=True).start()
+        
+        # Xử lý khi đóng cửa sổ
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)        
     
     def create_gui(self):
-        """Tạo các thành phần giao diện."""
-        # Tạo notebook (tab control)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Tab Tổng quan
-        self.overview_frame = ttk.Frame(self.notebook)
+        """Tạo giao diện người dùng."""
+        # Thêm các tab vào notebook
         self.notebook.add(self.overview_frame, text="Tổng quan")
-        self.create_overview_tab()
-        
-        # Tab Ví
-        self.wallet_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.wallet_frame, text="Ví")
-        self.create_wallet_tab()
-        
-        # Tab Đào coin
-        self.mining_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.mining_frame, text="Đào coin")
-        self.create_mining_tab()
-        
-        # Tab Giao dịch
-        self.transaction_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.transaction_frame, text="Giao dịch")
-        self.create_transaction_tab()
-        
-        # Tab Mạng
-        self.network_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.mining_frame, text="Đào coin")
         self.notebook.add(self.network_frame, text="Mạng")
-        self.create_network_tab()
-        
-        # Tab Blockchain
-        self.blockchain_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.blockchain_frame, text="Blockchain")
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Tạo nội dung cho các tab
+        self.create_overview_tab()
+        self.create_wallet_tab()
+        self.create_transaction_tab()
+        self.create_mining_tab()
+        self.create_network_tab()
         self.create_blockchain_tab()
-        
-        # Thanh trạng thái
-        self.status_frame = ttk.Frame(self.root)
-        self.status_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.status_label = ttk.Label(self.status_frame, text="Đang khởi động...")
-        self.status_label.pack(side=tk.LEFT)
-        
-        self.node_info_label = ttk.Label(self.status_frame, text=f"Node: {self.host}:{self.port}")
-        self.node_info_label.pack(side=tk.RIGHT)
     
     def create_overview_tab(self):
         """Tạo tab Tổng quan."""
@@ -174,290 +126,132 @@ class TuCoinGUI:
         # Frame chính
         main_frame = ttk.Frame(self.wallet_frame, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Frame tạo ví mới
+        create_frame = ttk.LabelFrame(main_frame, text="Tạo ví mới", padding=10)
+        create_frame.pack(fill=tk.X, pady=5)
+
+        # Input tên ví
+        ttk.Label(create_frame, text="Tên ví:").pack(side=tk.LEFT, padx=5)
+        self.wallet_name_entry = ttk.Entry(create_frame)
+        self.wallet_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
-        # Thông tin ví hiện tại
-        current_wallet_frame = ttk.LabelFrame(main_frame, text="Ví hiện tại", padding=10)
-        current_wallet_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(current_wallet_frame, text="Địa chỉ:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.wallet_address_label = ttk.Label(current_wallet_frame, text="Chưa có ví")
-        self.wallet_address_label.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(current_wallet_frame, text="Khóa riêng tư:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.wallet_private_key_label = ttk.Label(current_wallet_frame, text="***")
-        self.wallet_private_key_label.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(current_wallet_frame, text="Số dư:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.wallet_balance_label = ttk.Label(current_wallet_frame, text="0 TuCoin")
-        self.wallet_balance_label.grid(row=2, column=1, sticky=tk.W, pady=2)
-        
-        # Các nút thao tác ví
-        wallet_actions_frame = ttk.Frame(current_wallet_frame)
-        wallet_actions_frame.grid(row=3, column=0, columnspan=2, pady=10)
-        
-        self.create_wallet_button = ttk.Button(wallet_actions_frame, text="Tạo ví mới", command=self.create_new_wallet)
-        self.create_wallet_button.grid(row=0, column=0, padx=5)
-        
-        self.show_private_key_button = ttk.Button(wallet_actions_frame, text="Hiện khóa riêng tư", command=self.toggle_show_private_key)
-        self.show_private_key_button.grid(row=0, column=1, padx=5)
-        
-        self.copy_address_button = ttk.Button(wallet_actions_frame, text="Sao chép địa chỉ", command=self.copy_address_to_clipboard)
-        self.copy_address_button.grid(row=0, column=2, padx=5)
-        
-        # Danh sách ví đã lưu
-        saved_wallets_frame = ttk.LabelFrame(main_frame, text="Ví đã lưu", padding=10)
-        saved_wallets_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Tạo listbox và scrollbar
-        wallets_frame = ttk.Frame(saved_wallets_frame)
-        wallets_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.wallets_listbox = tk.Listbox(wallets_frame)
+        # Nút tạo ví
+        ttk.Button(create_frame, text="Tạo ví", command=self.create_new_wallet).pack(side=tk.LEFT, padx=5)
+
+        # Frame danh sách ví
+        list_frame = ttk.LabelFrame(main_frame, text="Danh sách ví", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Tạo Listbox và Scrollbar cho danh sách ví
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.wallets_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set)
         self.wallets_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        wallets_scrollbar = ttk.Scrollbar(wallets_frame, orient=tk.VERTICAL, command=self.wallets_listbox.yview)
-        wallets_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.wallets_listbox.config(yscrollcommand=wallets_scrollbar.set)
-        
-        # Nút tải ví
-        self.load_wallet_button = ttk.Button(saved_wallets_frame, text="Tải ví đã chọn", command=self.load_selected_wallet)
-        self.load_wallet_button.pack(pady=5)
-    
-    def create_mining_tab(self):
-        """Tạo tab Đào coin."""
-        # Frame chính
-        main_frame = ttk.Frame(self.mining_frame, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Thông tin đào
-        mining_info_frame = ttk.LabelFrame(main_frame, text="Thông tin đào", padding=10)
-        mining_info_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(mining_info_frame, text="Độ khó hiện tại:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.mining_difficulty_label = ttk.Label(mining_info_frame, text=f"{self.blockchain.difficulty} (số 0 đầu tiên)")
-        self.mining_difficulty_label.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(mining_info_frame, text="Phần thưởng:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.mining_reward_label = ttk.Label(mining_info_frame, text="100 TuCoin")
-        self.mining_reward_label.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(mining_info_frame, text="Địa chỉ nhận thưởng:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.mining_address_label = ttk.Label(mining_info_frame, text="Chưa có ví")
-        self.mining_address_label.grid(row=2, column=1, sticky=tk.W, pady=2)
-        
-        # Nút đào
-        mining_actions_frame = ttk.Frame(main_frame)
-        mining_actions_frame.pack(fill=tk.X, pady=10)
-        
-        self.start_mining_button = ttk.Button(mining_actions_frame, text="Đào khối mới", command=self.mine_block)
-        self.start_mining_button.pack()
-        
-        # Lịch sử đào
-        mining_history_frame = ttk.LabelFrame(main_frame, text="Lịch sử đào", padding=10)
-        mining_history_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Tạo treeview và scrollbar
-        mining_history_tree_frame = ttk.Frame(mining_history_frame)
-        mining_history_tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.mining_history_tree = ttk.Treeview(mining_history_tree_frame, columns=("block", "time", "transactions", "reward"))
-        self.mining_history_tree.heading("#0", text="")
-        self.mining_history_tree.heading("block", text="Khối")
-        self.mining_history_tree.heading("time", text="Thời gian")
-        self.mining_history_tree.heading("transactions", text="Số giao dịch")
-        self.mining_history_tree.heading("reward", text="Phần thưởng")
-        
-        self.mining_history_tree.column("#0", width=0, stretch=tk.NO)
-        self.mining_history_tree.column("block", width=50)
-        self.mining_history_tree.column("time", width=150)
-        self.mining_history_tree.column("transactions", width=100)
-        self.mining_history_tree.column("reward", width=100)
-        
-        self.mining_history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        mining_history_scrollbar = ttk.Scrollbar(mining_history_tree_frame, orient=tk.VERTICAL, command=self.mining_history_tree.yview)
-        mining_history_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.mining_history_tree.config(yscrollcommand=mining_history_scrollbar.set)
-    
-    def create_transaction_tab(self):
-        """Tạo tab Giao dịch."""
-        # Frame chính
-        main_frame = ttk.Frame(self.transaction_frame, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Tạo giao dịch mới
-        new_transaction_frame = ttk.LabelFrame(main_frame, text="Tạo giao dịch mới", padding=10)
-        new_transaction_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(new_transaction_frame, text="Từ:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.transaction_from_label = ttk.Label(new_transaction_frame, text="Chưa có ví")
-        self.transaction_from_label.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(new_transaction_frame, text="Đến:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.transaction_to_entry = ttk.Entry(new_transaction_frame, width=50)
-        self.transaction_to_entry.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(new_transaction_frame, text="Số lượng:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.transaction_amount_entry = ttk.Entry(new_transaction_frame, width=20)
-        self.transaction_amount_entry.grid(row=2, column=1, sticky=tk.W, pady=2)
-        
-        self.send_transaction_button = ttk.Button(new_transaction_frame, text="Gửi", command=self.send_transaction)
-        self.send_transaction_button.grid(row=3, column=1, sticky=tk.W, pady=10)
-        
-        # Giao dịch đang chờ
-        pending_transactions_frame = ttk.LabelFrame(main_frame, text="Giao dịch đang chờ", padding=10)
-        pending_transactions_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Tạo treeview và scrollbar
-        pending_tree_frame = ttk.Frame(pending_transactions_frame)
-        pending_tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.pending_transactions_tree = ttk.Treeview(pending_tree_frame, columns=("from", "to", "amount", "time"))
-        self.pending_transactions_tree.heading("#0", text="")
-        self.pending_transactions_tree.heading("from", text="Từ")
-        self.pending_transactions_tree.heading("to", text="Đến")
-        self.pending_transactions_tree.heading("amount", text="Số lượng")
-        self.pending_transactions_tree.heading("time", text="Thời gian")
-        
-        self.pending_transactions_tree.column("#0", width=0, stretch=tk.NO)
-        self.pending_transactions_tree.column("from", width=150)
-        self.pending_transactions_tree.column("to", width=150)
-        self.pending_transactions_tree.column("amount", width=100)
-        self.pending_transactions_tree.column("time", width=150)
-        
-        self.pending_transactions_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        pending_scrollbar = ttk.Scrollbar(pending_tree_frame, orient=tk.VERTICAL, command=self.pending_transactions_tree.yview)
-        pending_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.pending_transactions_tree.config(yscrollcommand=pending_scrollbar.set)
-    
-    def create_network_tab(self):
-        """Tạo tab Mạng."""
-        # Frame chính
-        main_frame = ttk.Frame(self.network_frame, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Kết nối node mới
-        connect_frame = ttk.LabelFrame(main_frame, text="Kết nối node mới", padding=10)
-        connect_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(connect_frame, text="Địa chỉ IP:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.peer_host_entry = ttk.Entry(connect_frame, width=30)
-        self.peer_host_entry.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(connect_frame, text="Cổng:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.peer_port_entry = ttk.Entry(connect_frame, width=10)
-        self.peer_port_entry.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        # Sửa tên phương thức từ connect_to_node thành connect_to_peer
-        self.connect_button = ttk.Button(connect_frame, text="Kết nối", command=self.connect_to_peer)
-        self.connect_button.grid(row=2, column=1, sticky=tk.W, pady=10)
-        
-        # Danh sách node đã kết nối
-        peers_frame = ttk.LabelFrame(main_frame, text="Node đã kết nối", padding=10)
-        peers_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Tạo listbox và scrollbar
-        peers_list_frame = ttk.Frame(peers_frame)
-        peers_list_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.peers_listbox = tk.Listbox(peers_list_frame)
-        self.peers_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        peers_scrollbar = ttk.Scrollbar(peers_list_frame, orient=tk.VERTICAL, command=self.peers_listbox.yview)
-        peers_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.peers_listbox.config(yscrollcommand=peers_scrollbar.set)
-    
-    def create_blockchain_tab(self):
-        """Tạo tab Blockchain."""
-        # Frame chính
-        main_frame = ttk.Frame(self.blockchain_frame, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Thông tin blockchain
-        blockchain_info_frame = ttk.LabelFrame(main_frame, text="Thông tin blockchain", padding=10)
-        blockchain_info_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(blockchain_info_frame, text="Số khối:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.blockchain_blocks_label = ttk.Label(blockchain_info_frame, text="0")
-        self.blockchain_blocks_label.grid(row=0, column=1, sticky=tk.W, pady=2)
-        
-        ttk.Label(blockchain_info_frame, text="Độ khó:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.blockchain_difficulty_label = ttk.Label(blockchain_info_frame, text=f"{self.blockchain.difficulty} (số 0 đầu tiên)")
-        self.blockchain_difficulty_label.grid(row=1, column=1, sticky=tk.W, pady=2)
-        
-        # Danh sách các khối
-        blocks_frame = ttk.LabelFrame(main_frame, text="Danh sách khối", padding=10)
-        blocks_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Tạo treeview và scrollbar
-        blocks_tree_frame = ttk.Frame(blocks_frame)
-        blocks_tree_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.blocks_tree = ttk.Treeview(blocks_tree_frame, columns=("index", "time", "transactions", "hash"))
-        self.blocks_tree.heading("#0", text="")
-        self.blocks_tree.heading("index", text="STT")
-        self.blocks_tree.heading("time", text="Thời gian")
-        self.blocks_tree.heading("transactions", text="Số giao dịch")
-        self.blocks_tree.heading("hash", text="Hash")
-        
-        self.blocks_tree.column("#0", width=0, stretch=tk.NO)
-        self.blocks_tree.column("index", width=50)
-        self.blocks_tree.column("time", width=150)
-        self.blocks_tree.column("transactions", width=100)
-        self.blocks_tree.column("hash", width=300)
-        
-        self.blocks_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        blocks_scrollbar = ttk.Scrollbar(blocks_tree_frame, orient=tk.VERTICAL, command=self.blocks_tree.yview)
-        blocks_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.blocks_tree.config(yscrollcommand=blocks_scrollbar.set)
-        
-        # Xem chi tiết khối
-        self.blocks_tree.bind("<Double-1>", self.show_block_details)
-    
-    def load_or_create_wallet(self):
-        """Tải ví hiện có hoặc tạo ví mới."""
-        # Lấy danh sách ví đã lưu
-        wallets = self.wallet_manager.list_wallets()
-        
-        if wallets:
-            # Tải ví đầu tiên
-            self.wallet_manager.load_wallet(wallets[0])
-        else:
-            # Tạo ví mới
-            wallet = self.wallet_manager.create_wallet()
-            self.wallet_manager.save_wallet(wallet)
-        
+        scrollbar.config(command=self.wallets_listbox.yview)
+
+        # Frame cho các nút thao tác
+        button_frame = ttk.Frame(list_frame)
+        button_frame.pack(fill=tk.X, pady=5)
+
+        # Nút chọn ví
+        ttk.Button(button_frame, text="Chọn làm ví hiện tại", 
+                   command=self.select_current_wallet).pack(side=tk.LEFT, padx=5)
+
+        # Nút xóa ví
+        ttk.Button(button_frame, text="Xóa ví", 
+                   command=self.delete_wallet).pack(side=tk.LEFT, padx=5)
+
         # Cập nhật danh sách ví
         self.update_wallets_list()
-    
-    def update_wallets_list(self):
-        """Cập nhật danh sách ví trong UI."""
-        # Xóa danh sách hiện tại
-        self.wallets_listbox.delete(0, tk.END)
+
+    def select_current_wallet(self):
+        """Chọn ví làm ví hiện tại."""
+        selection = self.wallets_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một ví từ danh sách")
+            return
+
+        selected_address = self.wallets_listbox.get(selection[0])
+        wallet = self.wallet_manager.load_wallet(selected_address)
         
-        # Lấy danh sách ví
+        if wallet:
+            self.wallet_manager.current_wallet = wallet
+            messagebox.showinfo("Thành công", f"Đã chọn ví: {wallet.address}")
+            self.update_ui()
+        else:
+            messagebox.showerror("Lỗi", "Không thể tải ví đã chọn")
+
+    def delete_wallet(self):
+        """Xóa ví đã chọn."""
+        selection = self.wallets_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một ví để xóa")
+            return
+
+        selected_address = self.wallets_listbox.get(selection[0])
+        
+        if messagebox.askyesno("Xác nhận", "Bạn có chắc muốn xóa ví này?"):
+            try:
+                self.wallet_manager.delete_wallet(selected_address)
+                
+                # Nếu xóa ví hiện tại, set current_wallet về None
+                if (self.wallet_manager.current_wallet and 
+                    self.wallet_manager.current_wallet.address == selected_address):
+                    self.wallet_manager.current_wallet = None
+                
+                self.update_wallets_list()
+                self.update_ui()
+                messagebox.showinfo("Thành công", "Đã xóa ví")
+            except Exception as e:
+                messagebox.showerror("Lỗi", f"Không thể xóa ví: {str(e)}")
+
+    def update_wallets_list(self):
+        """Cập nhật danh sách ví trong listbox."""
+        self.wallets_listbox.delete(0, tk.END)
         wallets = self.wallet_manager.list_wallets()
         
-        # Thêm vào listbox
         for wallet in wallets:
-            self.wallets_listbox.insert(tk.END, wallet)
-    
-    def create_new_wallet(self):
-        """Tạo ví mới."""
-        # Tạo ví mới
-        wallet = self.wallet_manager.create_wallet()
-        
-        # Lưu ví
-        self.wallet_manager.save_wallet(wallet)
-        
-        # Cập nhật UI
+            self.wallets_listbox.insert(tk.END, wallet.address)
+            # Highlight ví hiện tại nếu có
+            if (self.wallet_manager.current_wallet and 
+                wallet.address == self.wallet_manager.current_wallet.address):
+                self.wallets_listbox.itemconfig(tk.END, {'bg': '#e6e6e6'})
+
+    def load_or_create_wallet(self):
+        """Tải danh sách ví."""
         self.update_wallets_list()
-        self.update_ui()
+
+    def create_new_wallet(self):
+        """Tạo ví mới từ tên được nhập."""
+        wallet_name = self.wallet_name_entry.get().strip()
         
-        messagebox.showinfo("Thành công", f"Đã tạo ví mới với địa chỉ: {wallet.address}")
-    
+        if not wallet_name:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập tên ví")
+            return
+
+        try:
+            # Tạo ví mới với tên đã nhập
+            wallet = self.wallet_manager.create_wallet(wallet_name)
+            
+            # Lưu ví
+            self.wallet_manager.save_wallet(wallet)
+            
+            # Xóa nội dung input
+            self.wallet_name_entry.delete(0, tk.END)
+            
+            # Cập nhật danh sách ví
+            self.update_wallets_list()
+            
+            messagebox.showinfo("Thành công", f"Đã tạo ví mới:\nTên: {wallet_name}\nĐịa chỉ: {wallet.address}")
+        
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể tạo ví: {str(e)}")
+
     def load_selected_wallet(self):
         """Tải ví đã chọn."""
         # Lấy địa chỉ ví đã chọn
@@ -501,26 +295,77 @@ class TuCoinGUI:
             self.root.clipboard_append(wallet.address)
             messagebox.showinfo("Thành công", "Đã sao chép địa chỉ ví vào clipboard")
 
+    def create_network_tab(self):
+        """Tạo tab Mạng."""
+        # Frame chính
+        main_frame = ttk.Frame(self.network_frame, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Frame thông tin node
+        info_frame = ttk.LabelFrame(main_frame, text="Thông tin node", padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        # Địa chỉ node
+        address_frame = ttk.Frame(info_frame)
+        address_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(address_frame, text="Địa chỉ node:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(address_frame, text=self.node.address).pack(side=tk.LEFT)
+
+        # Frame kết nối
+        connect_frame = ttk.LabelFrame(main_frame, text="Kết nối với node khác", padding=10)
+        connect_frame.pack(fill=tk.X, pady=5)
+
+        # IP và port để kết nối
+        ip_frame = ttk.Frame(connect_frame)
+        ip_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(ip_frame, text="Địa chỉ IP:").pack(side=tk.LEFT, padx=5)
+        self.connect_ip_entry = ttk.Entry(ip_frame)
+        self.connect_ip_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.connect_ip_entry.insert(0, "127.0.0.1")
+
+        port_frame = ttk.Frame(connect_frame)
+        port_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(port_frame, text="Cổng:").pack(side=tk.LEFT, padx=5)
+        self.connect_port_entry = ttk.Entry(port_frame)
+        self.connect_port_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.connect_port_entry.insert(0, "5000")
+
+        # Nút kết nối
+        ttk.Button(
+            connect_frame, 
+            text="Kết nối", 
+            command=self.connect_to_peer
+        ).pack(pady=10)
+
+        # Frame danh sách peers
+        peers_frame = ttk.LabelFrame(main_frame, text="Danh sách các node đã kết nối", padding=10)
+        peers_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Listbox hiển thị danh sách peers
+        self.peers_listbox = tk.Listbox(peers_frame)
+        self.peers_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Scrollbar cho listbox
+        scrollbar = ttk.Scrollbar(peers_frame, orient=tk.VERTICAL, command=self.peers_listbox.yview)
+        self.peers_listbox.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
     def connect_to_peer(self):
         """Kết nối đến một node khác."""
-        host = self.peer_host_entry.get()
-        port_str = self.peer_port_entry.get()
-        
         try:
-            port = int(port_str)
+            host = self.connect_ip_entry.get()
+            port = int(self.connect_port_entry.get())
+            
             if self.node.connect_to_peer(host, port):
-                messagebox.showinfo("Thành công", f"Đã kết nối thành công đến node {host}:{port}")
-                # Xóa form
-                self.peer_host_entry.delete(0, tk.END)
-                self.peer_port_entry.delete(0, tk.END)
-                # Cập nhật UI
+                messagebox.showinfo("Thành công", f"Đã kết nối đến {host}:{port}")
                 self.update_ui()
-                # Cập nhật danh sách peers
-                self.update_peers_list()
             else:
-                messagebox.showerror("Lỗi", f"Không thể kết nối đến node {host}:{port}")
+                messagebox.showerror("Lỗi", f"Không thể kết nối đến {host}:{port}")
+        
         except ValueError:
-            messagebox.showerror("Lỗi", "Port phải là số nguyên")
+            messagebox.showerror("Lỗi", "Cổng không hợp lệ")
+        except Exception as e:
+            messagebox.showerror("Lỗi", str(e))
 
     def update_peers_list(self):
         """Cập nhật danh sách peers trong UI."""
@@ -581,10 +426,77 @@ class TuCoinGUI:
         # Focus vào ô nhập địa chỉ IP
         self.connect_ip_entry.focus()
 
+    def create_transaction_tab(self):
+        """Tạo tab Giao dịch."""
+        # Frame chính
+        main_frame = ttk.Frame(self.transaction_frame, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Frame gửi giao dịch
+        send_frame = ttk.LabelFrame(main_frame, text="Gửi TuCoin", padding=10)
+        send_frame.pack(fill=tk.X, pady=5)
+
+        # Địa chỉ người gửi (ví hiện tại)
+        from_frame = ttk.Frame(send_frame)
+        from_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(from_frame, text="Từ:").pack(side=tk.LEFT, padx=5)
+        self.transaction_from_label = ttk.Label(from_frame, text="Chưa chọn ví")
+        self.transaction_from_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Địa chỉ người nhận
+        to_frame = ttk.Frame(send_frame)
+        to_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(to_frame, text="Đến:").pack(side=tk.LEFT, padx=5)
+        self.transaction_to_entry = ttk.Entry(to_frame)
+        self.transaction_to_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Số lượng TuCoin
+        amount_frame = ttk.Frame(send_frame)
+        amount_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(amount_frame, text="Số lượng:").pack(side=tk.LEFT, padx=5)
+        self.transaction_amount_entry = ttk.Entry(amount_frame)
+        self.transaction_amount_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(amount_frame, text="TuCoin").pack(side=tk.LEFT, padx=5)
+
+        # Nút gửi
+        ttk.Button(send_frame, text="Gửi", command=self.send_transaction).pack(pady=10)
+
+        # Frame giao dịch đang chờ
+        pending_frame = ttk.LabelFrame(main_frame, text="Giao dịch đang chờ", padding=10)
+        pending_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Treeview cho giao dịch đang chờ
+        self.pending_transactions_tree = ttk.Treeview(
+            pending_frame,
+            columns=("from", "to", "amount", "time"),
+            show="headings"
+        )
+
+        # Định nghĩa các cột
+        self.pending_transactions_tree.heading("from", text="Từ")
+        self.pending_transactions_tree.heading("to", text="Đến")
+        self.pending_transactions_tree.heading("amount", text="Số lượng")
+        self.pending_transactions_tree.heading("time", text="Thời gian")
+
+        # Điều chỉnh độ rộng cột
+        self.pending_transactions_tree.column("from", width=150)
+        self.pending_transactions_tree.column("to", width=150)
+        self.pending_transactions_tree.column("amount", width=100)
+        self.pending_transactions_tree.column("time", width=150)
+
+        # Thêm scrollbar
+        scrollbar = ttk.Scrollbar(pending_frame, orient=tk.VERTICAL, command=self.pending_transactions_tree.yview)
+        self.pending_transactions_tree.configure(yscrollcommand=scrollbar.set)
+
+        # Pack các widget
+        self.pending_transactions_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
     def send_transaction(self):
         """Gửi giao dịch mới."""
-        if not self.wallet:
-            messagebox.showerror("Lỗi", "Vui lòng tạo hoặc tải ví trước")
+        wallet = self.wallet_manager.get_current_wallet()
+        if not wallet:
+            messagebox.showerror("Lỗi", "Vui lòng chọn ví trước")
             return
         
         receiver = self.transaction_to_entry.get()
@@ -596,13 +508,13 @@ class TuCoinGUI:
                 raise ValueError("Số lượng phải lớn hơn 0")
             
             # Kiểm tra số dư
-            balance = self.blockchain.get_balance(self.wallet.address)
+            balance = self.blockchain.get_balance(wallet.address)
             if amount > balance:
                 messagebox.showerror("Lỗi", f"Số dư không đủ (hiện có {balance} TuCoin)")
                 return
             
             # Tạo và gửi giao dịch
-            success = self.node.add_transaction(self.wallet.address, receiver, amount)
+            success = self.node.add_transaction(wallet.address, receiver, amount)
             
             if success:
                 # Xóa form
@@ -641,7 +553,7 @@ class TuCoinGUI:
         
         # Thêm thông tin khối
         text_widget.insert(tk.END, f"Khối #{block.index}\n\n")
-        text_widget.insert(tk.END, f"Thời gian: {block.timestamp}\n")
+        text_widget.insert(tk.END, f"Thời gian: {datetime.fromtimestamp(block.timestamp)}\n")
         text_widget.insert(tk.END, f"Hash: {block.hash}\n")
         text_widget.insert(tk.END, f"Hash khối trước: {block.previous_hash}\n")
         text_widget.insert(tk.END, f"Proof: {block.proof}\n\n")
@@ -651,10 +563,147 @@ class TuCoinGUI:
             text_widget.insert(tk.END, f"Từ: {tx['sender']}\n")
             text_widget.insert(tk.END, f"Đến: {tx['receiver']}\n")
             text_widget.insert(tk.END, f"Số lượng: {tx['amount']} TuCoin\n")
-            text_widget.insert(tk.END, f"Thời gian: {tx['timestamp']}\n")
+            text_widget.insert(tk.END, f"Thời gian: {datetime.fromtimestamp(tx['timestamp'])}\n")
             text_widget.insert(tk.END, "\n")
         
         text_widget.config(state=tk.DISABLED)
+
+    def create_blockchain_tab(self):
+        """Tạo tab Blockchain."""
+        # Frame chính
+        main_frame = ttk.Frame(self.blockchain_frame, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Frame thông tin
+        info_frame = ttk.LabelFrame(main_frame, text="Thông tin blockchain", padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        # Thông tin blockchain
+        ttk.Label(info_frame, text="Số khối:").pack(side=tk.LEFT, padx=5)
+        self.blockchain_blocks_label = ttk.Label(info_frame, text="")
+        self.blockchain_blocks_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Frame danh sách khối
+        list_frame = ttk.LabelFrame(main_frame, text="Danh sách khối", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Tạo Treeview và Scrollbar cho danh sách khối
+        list_container = ttk.Frame(list_frame)
+        list_container.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(list_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.blocks_tree = ttk.Treeview(list_container, yscrollcommand=scrollbar.set)
+        self.blocks_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.blocks_tree.yview)
+
+        # Cập nhật danh sách khối
+        self.update_blocks_list()
+
+    def update_blocks_list(self):
+        """Cập nhật danh sách các khối trong blockchain."""
+        # Xóa tất cả các mục hiện có
+        self.blocks_tree.delete(*self.blocks_tree.get_children())
+        
+        # Cấu hình các cột
+        self.blocks_tree["columns"] = ("index", "timestamp", "transactions", "hash")
+        self.blocks_tree["show"] = "headings"
+        
+        # Định dạng các cột
+        self.blocks_tree.heading("index", text="STT")
+        self.blocks_tree.heading("timestamp", text="Thời gian")
+        self.blocks_tree.heading("transactions", text="Số giao dịch")
+        self.blocks_tree.heading("hash", text="Hash")
+        
+        # Điều chỉnh độ rộng cột
+        self.blocks_tree.column("index", width=50)
+        self.blocks_tree.column("timestamp", width=150)
+        self.blocks_tree.column("transactions", width=100)
+        self.blocks_tree.column("hash", width=300)
+        
+        # Thêm các khối vào tree
+        for block in self.blockchain.chain:
+            self.blocks_tree.insert("", tk.END, values=(
+                block.index,
+                datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+                len(block.transactions),
+                block.hash[:50] + "..." if len(block.hash) > 50 else block.hash
+            ))
+        
+        # Cập nhật label số lượng khối
+        self.blockchain_blocks_label.config(text=str(len(self.blockchain.chain)))
+        
+        # Bind double-click event để xem chi tiết khối
+        self.blocks_tree.bind("<Double-1>", self.show_block_details)
+
+    def create_mining_tab(self):
+        """Tạo tab Đào coin."""
+        # Frame chính
+        main_frame = ttk.Frame(self.mining_frame, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Frame thông tin
+        info_frame = ttk.LabelFrame(main_frame, text="Thông tin đào coin", padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        # Địa chỉ ví nhận thưởng
+        address_frame = ttk.Frame(info_frame)
+        address_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(address_frame, text="Địa chỉ ví:").pack(side=tk.LEFT, padx=5)
+        self.mining_address_label = ttk.Label(address_frame, text="Chưa chọn ví")
+        self.mining_address_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Frame điều khiển
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill=tk.X, pady=10)
+
+        # Nút đào một khối
+        self.mine_button = ttk.Button(
+            control_frame, 
+            text="Đào một khối", 
+            command=self.mine_block
+        )
+        self.mine_button.pack(side=tk.LEFT, padx=5)
+
+        # Nút bắt đầu/dừng đào tự động
+        self.start_mining_button = ttk.Button(
+            control_frame, 
+            text="Bắt đầu đào tự động", 
+            command=self.toggle_auto_mining
+        )
+        self.start_mining_button.pack(side=tk.LEFT, padx=5)
+
+    def toggle_auto_mining(self):
+        """Bắt đầu/dừng đào tự động."""
+        wallet = self.wallet_manager.get_current_wallet()
+        if not wallet:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ví trước")
+            return
+
+        if not self.auto_mining:
+            # Bắt đầu đào tự động
+            self.auto_mining = True
+            self.start_mining_button["text"] = "Dừng đào tự động"
+            self.mine_button["state"] = "disabled"
+            
+            def auto_mining_thread():
+                while self.auto_mining and self.running:
+                    self.node.mine_block(wallet.address)
+                    time.sleep(1)  # Đợi 1 giây trước khi đào khối tiếp
+            
+            self.auto_mining_thread = threading.Thread(
+                target=auto_mining_thread, 
+                daemon=True
+            )
+            self.auto_mining_thread.start()
+        else:
+            # Dừng đào tự động
+            self.auto_mining = False
+            self.start_mining_button["text"] = "Bắt đầu đào tự động"
+            self.mine_button["state"] = "normal"
+            if self.auto_mining_thread:
+                self.auto_mining_thread.join()
 
     def update_ui(self):
         """Cập nhật giao diện người dùng."""
@@ -721,6 +770,18 @@ class TuCoinGUI:
         self.node.stop()
         self.root.destroy()
 
+def get_local_ip():
+    """Lấy địa chỉ IP local của máy."""
+    try:
+        # Tạo socket và kết nối đến một địa chỉ public (Google DNS)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
 def main():
     """Hàm main để khởi động ứng dụng."""
     parser = argparse.ArgumentParser(description="TuCoin GUI")
@@ -743,3 +804,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
